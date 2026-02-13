@@ -246,100 +246,137 @@ DEGREE_DEFINITIONS = {
 
 def extract_education(text):
     lines = [l.strip() for l in text.split("\n") if l.strip()]
-    lower = [l.lower() for l in lines]
-
     results = {}
-    used_lines = set()
 
-    DEGREE_RULES = [
-        ("12th", [
-            r"\bhigher school certificate\b",
-            r"\bhigher secondary\b",
-            r"\bhsc\b",
-            r"\b12th\b"
-        ]),
-        ("10th", [
-            r"\bsecondary school certificate\b",
-            r"\bssc\b",
-            r"\b10th\b"
-        ]),
-        ("BCA", [
-            r"\bbca\b",
-            r"\bbachelor of computer applications\b"
-        ]),
-        ("BTECH", [
-            r"\bbtech\b",
-            r"\bbachelor of technology\b"
-        ]),
-        ("BE", [
-            r"\bbe\b",
-            r"\bbachelor of engineering\b"
-        ]),
-        ("MCA", [
-            r"\bmca\b",
-            r"\bmaster of computer applications\b"
-        ]),
-        ("MTECH", [
-            r"\bmtech\b",
-            r"\bmaster of technology\b"
-        ]),
+    STOP_HEADERS = [
+        "experience", "projects", "skills",
+        "awards", "activities", "personal",
+        "publications", "hobbies"
     ]
 
-    for i, line in enumerate(lower):
-        if i in used_lines:
+    DEGREE_KEYWORDS = [
+        "bachelor", "master", "bca", "mca",
+        "b.tech", "m.tech", "msc", "m.sc",
+        "bsc", "b.sc", "mba", "diploma",
+        "phd", "class 10", "class 12",
+        "ssc", "hsc"
+    ]
+
+    def normalize_degree(line):
+        lower = line.lower()
+
+        if "msc-cs" in lower or "msc cs" in lower:
+            return "MSc"
+        if "m.c.a" in lower or "mca" in lower:
+            return "MCA"
+        if "b.c.a" in lower or "bca" in lower:
+            return "BCA"
+        if "h.s.c" in lower or "hsc" in lower or "class 12" in lower:
+            return "12th"
+        if "s.s.c" in lower or "ssc" in lower or "class 10" in lower:
+            return "10th"
+
+        # Fallback: take first meaningful academic phrase
+        clean = re.split(r"\||–|-", line)[0].strip()
+        clean = clean.split(",")[0].strip()
+        clean = re.sub(r"\s+", " ", clean)
+        return clean
+
+    def extract_score(line):
+        # Remove year ranges like 2018-2019
+        line = re.sub(r"\b\d{4}\s*[-–]\s*\d{4}\b", "", line)
+
+        # Percentage keyword format
+        keyword_match = re.search(
+            r"percentage\s*(\d+(?:\.\d+)?)",
+            line,
+            re.IGNORECASE
+        )
+        if keyword_match:
+            value = keyword_match.group(1)
+            return value + "%"
+
+        # Decimal CGPA
+        cgpa_match = re.search(
+            r"\b\d+\.\d+\s*cgpa\b",
+            line,
+            re.IGNORECASE
+        )
+        if cgpa_match:
+            return cgpa_match.group().upper()
+
+        # Decimal percentage
+        percent_decimal = re.search(
+            r"\b\d+\.\d+%",
+            line
+        )
+        if percent_decimal:
+            return percent_decimal.group()
+
+        # Integer percentage
+        percent_int = re.search(
+            r"\b\d+%",
+            line
+        )
+        if percent_int:
+            return percent_int.group()
+
+        return None
+
+    for i, line in enumerate(lines):
+        lower = line.lower()
+
+        # Stop if new section
+        if any(stop in lower for stop in STOP_HEADERS):
             continue
 
-        for degree, patterns in DEGREE_RULES:
-            if degree in results:
-                continue
+        # Detect degree line
+        if not any(k in lower for k in DEGREE_KEYWORDS):
+            continue
 
-            if any(re.search(p, line) for p in patterns):
-                score = None
+        degree = normalize_degree(line)
 
-                # check same line + next 2 lines
-                for j in range(i, min(i + 3, len(lower))):
-                    if j != i and any(
-                        re.search(p, lower[j])
-                        for _, pats in DEGREE_RULES
-                        for p in pats
-                    ):
-                        break
+        if degree in results:
+            continue
 
-                    percent = re.search(r"\b\d{2,3}\s*%", lower[j])
-                    cgpa = re.search(r"\b\d(?:\.\d{1,2})\b", lower[j])
+        # 1️⃣ Same line first
+        score = extract_score(line)
 
-                    if percent:
-                        score = percent.group()
-                        used_lines.update(range(i, j + 1))
-                        break
-                    if cgpa:
-                        score = cgpa.group()
-                        used_lines.update(range(i, j + 1))
-                        break
+        # 2️⃣ Fallback: next 1–3 lines
+        if not score:
+            for j in range(i + 1, min(i + 4, len(lines))):
+                next_lower = lines[j].lower()
 
+                # Stop if new degree encountered
+                if any(k in next_lower for k in DEGREE_KEYWORDS):
+                    break
+
+                # Stop if new section encountered
+                if any(stop in next_lower for stop in STOP_HEADERS):
+                    break
+
+                score = extract_score(lines[j])
                 if score:
-                    results[degree] = score
-                break
+                    break
 
-    # FINAL OUTPUT ORDER
+        if score:
+            results[degree] = score
+
+    # Output order
     output = []
 
     if "10th" in results:
-        output.append(f"10th: {results['10th']}")
+        output.append(f"10th {results['10th']}")
     if "12th" in results:
-        output.append(f"12th: {results['12th']}")
+        output.append(f"12th {results['12th']}")
 
-    for b in ["BCA", "BTECH", "BE"]:
-        if b in results:
-            output.append(f"{b}: {results[b]}")
-            break
-
-    for m in ["MCA", "MTECH"]:
-        if m in results:
-            output.append(f"{m}: {results[m]}")
-            break
+    for key in results:
+        if key not in ["10th", "12th"]:
+            output.append(f"{key} {results[key]}")
 
     return "\n".join(output)
+
+
 
 CERT_ISSUER_HINTS = [
     "ibm", "google", "microsoft", "amazon", "aws",
@@ -369,37 +406,84 @@ def extract_certifications(text):
     results = []
     capture = False
 
+    # Start only on these headers (case-insensitive)
+    START_HEADERS = [
+        "certification",
+        "certifications",
+        "certification & trainings",
+        "certifications & trainings",
+        "training",
+    ]
+
+    # Stop immediately on these headers
+    STOP_HEADERS = [
+        "activities",
+        "competitions",
+        "achievements",
+        "projects",
+        "experience",
+        "personal details",
+        "date of birth",
+        "gender",
+        "address",
+        "hobbies",
+        "nationality",
+        "education",
+        "skills",
+        "publications",
+    ]
+
+    # Personal data keywords to reject
+    PERSONAL_KEYWORDS = [
+        "email", "@", "phone", "mobile",
+        "date of birth", "dob", "gender",
+        "address", "nationality"
+    ]
+
+    # Activity/competition indicators to reject
+    ACTIVITY_KEYWORDS = [
+        "competition", "winner", "volunteer",
+        "participant", "hackathon"
+    ]
+
     for line in lines:
         lower = line.lower()
 
-        # Detect certification section start
-        if "certification" in lower or "training" in lower or "course" in lower:
+        # Detect start header
+        if any(h in lower for h in START_HEADERS):
             capture = True
             continue
 
-        # Stop if a new major section starts
-        if any(h in lower for h in ["education", "experience", "projects", "skills", "awards"]):
-            capture = False
+        # Stop at first new section
+        if capture and any(h in lower for h in STOP_HEADERS):
+            break
 
-        if capture:
-            clean = line.lstrip("•-* ").strip()
+        if not capture:
+            continue
 
-            # Skip short or irrelevant lines
-            if len(clean.split()) < 3:
-                continue
+        clean = line.lstrip("•-* ").strip()
+        clean_lower = clean.lower()
 
-            if any(w in lower for w in EDUCATION_BLOCK_WORDS):
-                continue
+        # Skip short lines
+        if len(clean.split()) < 3:
+            continue
 
-            if any(w in lower for w in ACTIVITY_BLOCK_WORDS):
-                continue
+        # Reject personal data
+        if any(k in clean_lower for k in PERSONAL_KEYWORDS):
+            continue
 
-            results.append(clean)
+        # Reject activities
+        if any(k in clean_lower for k in ACTIVITY_KEYWORDS):
+            continue
+
+        results.append(clean)
 
     if not results:
         return "No certification data available"
 
     return "\n".join(results)
+
+
 
 
 
